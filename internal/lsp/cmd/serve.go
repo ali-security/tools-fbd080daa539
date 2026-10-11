@@ -27,7 +27,6 @@ import (
 type Serve struct {
 	Logfile     string        `flag:"logfile" help:"filename to log to. if value is \"auto\", then logging to a default output file is enabled"`
 	Mode        string        `flag:"mode" help:"no effect"`
-	Port        int           `flag:"port" help:"port on which to run gopls for debugging purposes"`
 	Address     string        `flag:"listen" help:"address on which to listen for remote connections. If prefixed by 'unix;', the subsequent address is assumed to be a unix domain socket. Otherwise, TCP is used."`
 	IdleTimeout time.Duration `flag:"listen.timeout" help:"when used with -listen, shut down the server when there are no connected clients for this duration"`
 	Trace       bool          `flag:"rpc.trace" help:"print the full rpc trace in lsp inspector format"`
@@ -63,7 +62,7 @@ func (s *Serve) Run(ctx context.Context, args ...string) error {
 	}
 
 	di := debug.GetInstance(ctx)
-	isDaemon := s.Address != "" || s.Port != 0
+	isDaemon := s.Address != ""
 	if di != nil {
 		closeLog, err := di.SetLogFile(s.Logfile, isDaemon)
 		if err != nil {
@@ -89,17 +88,18 @@ func (s *Serve) Run(ctx context.Context, args ...string) error {
 
 	var network, addr string
 	if s.Address != "" {
+		// -listen=address
 		network, addr = parseAddr(s.Address)
 	}
-	if s.Port != 0 {
-		network = "tcp"
-		addr = fmt.Sprintf(":%v", s.Port)
-	}
 	if addr != "" {
+		if strings.HasPrefix(addr, ":") {
+			return fmt.Errorf("-listen=%s implicitly binds all network interfaces; please use an explicit host such as 0.0.0.0 (all interfaces) or localhost (safer)", addr)
+		}
 		log.Printf("Gopls daemon: listening on %s network, address %s...", network, addr)
 		defer log.Printf("Gopls daemon: exiting")
 		return jsonrpc2.ListenAndServe(ctx, network, addr, ss, s.IdleTimeout)
 	}
+	// communicate over stdin/stdout
 	stream := jsonrpc2.NewHeaderStream(fakenet.NewConn("stdio", os.Stdin, os.Stdout))
 	if s.Trace && di != nil {
 		stream = protocol.LoggingStream(stream, di.LogWriter)
