@@ -7,6 +7,9 @@
 package span_test
 
 import (
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"golang.org/x/tools/internal/span"
@@ -17,6 +20,13 @@ import (
 // tests by using only forward slashes, assuming that the standard library
 // functions filepath.ToSlash and filepath.FromSlash do not need testing.
 func TestURIFromPath(t *testing.T) {
+	// Rooted paths without a drive letter resolve against the current
+	// drive, which is not C: on every machine (e.g. CI checkouts on D:).
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	drive := strings.ToUpper(filepath.VolumeName(wd))
 	for _, test := range []struct {
 		path, wantFile string
 		wantURI        span.URI
@@ -57,13 +67,18 @@ func TestURIFromPath(t *testing.T) {
 			wantURI:  span.URI("file:///C:/Go/src/bob%20george/george/george.go"),
 		},
 	} {
+		wantURI, wantFile := test.wantURI, test.wantFile
+		if strings.HasPrefix(test.path, `\`) {
+			wantFile = drive + strings.TrimPrefix(test.wantFile, "C:")
+			wantURI = span.URI("file:///" + drive + strings.TrimPrefix(string(test.wantURI), "file:///C:"))
+		}
 		got := span.URIFromPath(test.path)
-		if got != test.wantURI {
-			t.Errorf("URIFromPath(%q): got %q, expected %q", test.path, got, test.wantURI)
+		if got != wantURI {
+			t.Errorf("URIFromPath(%q): got %q, expected %q", test.path, got, wantURI)
 		}
 		gotFilename := got.Filename()
-		if gotFilename != test.wantFile {
-			t.Errorf("Filename(%q): got %q, expected %q", got, gotFilename, test.wantFile)
+		if gotFilename != wantFile {
+			t.Errorf("Filename(%q): got %q, expected %q", got, gotFilename, wantFile)
 		}
 	}
 }

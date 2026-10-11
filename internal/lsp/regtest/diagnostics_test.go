@@ -877,7 +877,9 @@ const C = a.A
 // This is a copy of the scenario_default/quickfix_empty_files.txt test from
 // govim. Reproduces golang/go#39646.
 func TestQuickFixEmptyFiles(t *testing.T) {
-	testenv.NeedsGo1Point(t, 15)
+	// Needs the go list handling of invalid package files from the Go 1.16
+	// development tree this snapshot was tested against; released go1.15 lacks it.
+	testenv.NeedsGo1Point(t, 16)
 
 	const mod = `
 -- go.mod --
@@ -1101,7 +1103,9 @@ func main() {
 
 // Reproduces golang/go#39763.
 func TestInvalidPackageName(t *testing.T) {
-	testenv.NeedsGo1Point(t, 15)
+	// Needs the go list handling of invalid package files from the Go 1.16
+	// development tree this snapshot was tested against; released go1.15 lacks it.
+	testenv.NeedsGo1Point(t, 16)
 
 	const pkgDefault = `
 -- go.mod --

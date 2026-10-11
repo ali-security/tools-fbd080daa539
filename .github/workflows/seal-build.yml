@@ -1,0 +1,145 @@
+name: seal-build
+
+on:
+  workflow_dispatch:
+    inputs:
+      test-filter:
+        description: "Optional go test -run regex; empty runs the full suite"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+env:
+  MODULE_PATH: golang.org/x/tools
+  MODULE_VERSION: v0.0.0-20200804011535-6c149bb5ef0d
+
+jobs:
+  module-zip:
+    name: module zip
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+          cache: false
+      - name: Build zip helper (x/mod v0.24.0)
+        run: |
+          set -eux
+          HELPER=$(mktemp -d)
+          cp .github/create_mod.go "$HELPER/main.go"
+          cd "$HELPER"
+          go mod init example.com/mod
+          go get golang.org/x/mod@v0.24.0
+          go build -o "$RUNNER_TEMP/create_mod" .
+      - name: Stage module tree and create module zip
+        run: |
+          set -eux
+          mkdir -p "$RUNNER_TEMP/zipsrc" "$RUNNER_TEMP/out"
+          tar -c --exclude=.git --exclude=.github -C "$GITHUB_WORKSPACE" . | tar -x -C "$RUNNER_TEMP/zipsrc"
+          test ! -e "$RUNNER_TEMP/zipsrc/.github"
+          test -f "$RUNNER_TEMP/zipsrc/go.mod"
+          test -f "$RUNNER_TEMP/zipsrc/.gitignore"
+          test -f "$RUNNER_TEMP/zipsrc/.gitattributes"
+          "$RUNNER_TEMP/create_mod" "$MODULE_PATH" "$MODULE_VERSION" "$RUNNER_TEMP/zipsrc" "$RUNNER_TEMP/out/$MODULE_VERSION.zip"
+          COUNT=$(unzip -Z1 "$RUNNER_TEMP/out/$MODULE_VERSION.zip" | wc -l)
+          echo "module zip entries: $COUNT"
+          test "$COUNT" -eq 1528
+      - uses: actions/upload-artifact@v4
+        with:
+          name: module-zip
+          path: ${{ runner.temp }}/out/v0.0.0-20200804011535-6c149bb5ef0d.zip
+          if-no-files-found: error
+
+  test:
+    name: test (${{ matrix.os }}, go ${{ matrix.go }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            go: "1.13.15"
+          - os: macos-14
+            go: "1.15.15"
+          - os: windows-latest
+            go: "1.13.15"
+    defaults:
+      run:
+        shell: bash
+    env:
+      # GO111MODULE left at its default (auto; the repo's go.mod turns modules on), as on
+      # the Go build dashboard: forcing "on" makes go1.15 go/build resolve the GOPATH-mode
+      # fixtures (refactor/rename TestDiff, internal/imports */GOPATH) via module-mode go list.
+      GOPROXY: https://proxy.golang.org
+      GOFLAGS: ""
+    steps:
+      - name: Disable CRLF conversion
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go }}
+          architecture: x64
+          cache: false
+      - name: macOS - GNU diff (tests run diff -u and probe it via NeedsTool; BSD diff fails the probe), resolved underscore-free TMPDIR
+        if: runner.os == 'macOS'
+        run: |
+          set -eux
+          brew install diffutils
+          echo "$(brew --prefix diffutils)/bin" >> "$GITHUB_PATH"
+          # Default macOS TMPDIR is under /var -> /private/var (GOPATH-mode tests compare
+          # Getwd against GOPATH and miss); RUNNER_TEMP contains a "_temp" element, which
+          # the go command ignores. Use a resolved, underscore-free dir instead.
+          mkdir -p "$HOME/gotmp"
+          echo "TMPDIR=$(cd "$HOME/gotmp" && pwd -P)" >> "$GITHUB_ENV"
+      - name: Windows - msvcrt mingw gcc for Go 1.13 runtime/cgo, short TEMP
+        if: runner.os == 'Windows'
+        run: |
+          set -eux
+          choco install mingw --version 8.1.0 --allow-downgrade -y --no-progress
+          echo 'C:\ProgramData\chocolatey\lib\mingw\tools\install\mingw64\bin' >> "$GITHUB_PATH"
+          echo "TEMP=$RUNNER_TEMP" >> "$GITHUB_ENV"
+          echo "TMP=$RUNNER_TEMP" >> "$GITHUB_ENV"
+      - name: Toolchain info
+        run: |
+          set -eux
+          go version
+          go env
+          which patch
+          diff --version | head -1
+          if [ "$RUNNER_OS" = "Windows" ]; then gcc --version | grep -F 8.1.0; fi
+      - name: Build
+        run: |
+          set -eux
+          go build ./...
+      - name: Test
+        run: |
+          set -euxo pipefail
+          FILTER="${{ inputs.test-filter }}"
+          FILTER="${FILTER// /|}"
+          if [ -n "$FILTER" ]; then
+            go test -v -p 1 -run "$FILTER" ./... 2>&1 | tee "$RUNNER_TEMP/go-test.log"
+          else
+            go test -v -p 1 ./... 2>&1 | tee "$RUNNER_TEMP/go-test.log"
+          fi
+      - name: Test summary
+        if: always()
+        run: |
+          set -eu
+          # The log carries invalid UTF-8 test fixtures; macOS awk aborts on them in a UTF-8 locale.
+          export LC_ALL=C
+          LOG="$RUNNER_TEMP/go-test.log"
+          test -f "$LOG"
+          PASS=$(awk '/^[ \t]*--- PASS/ {n++} END {print n+0}' "$LOG")
+          FAIL=$(awk '/^[ \t]*--- FAIL/ {n++} END {print n+0}' "$LOG")
+          SKIP=$(awk '/^[ \t]*--- SKIP/ {n++} END {print n+0}' "$LOG")
+          OKPKG=$(awk '/^ok[ \t]/ {n++} END {print n+0}' "$LOG")
+          FAILPKG=$(awk '/^FAIL[ \t]/ {n++} END {print n+0}' "$LOG")
+          echo "TEST SUMMARY (${{ matrix.os }}, go ${{ matrix.go }}): tests passed=$PASS failed=$FAIL skipped=$SKIP; packages ok=$OKPKG failed=$FAILPKG"
+          test "$FAIL" -eq 0
+          test "$FAILPKG" -eq 0

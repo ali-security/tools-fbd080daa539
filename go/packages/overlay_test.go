@@ -699,7 +699,9 @@ func TestInvalidFilesBeforeOverlay(t *testing.T) {
 }
 
 func testInvalidFilesBeforeOverlay(t *testing.T, exporter packagestest.Exporter) {
-	testenv.NeedsGo1Point(t, 15)
+	// Needs the go list handling of invalid package files from the Go 1.16
+	// development tree this snapshot was tested against; released go1.15 lacks it.
+	testenv.NeedsGo1Point(t, 16)
 
 	exported := packagestest.Export(t, exporter, []packagestest.Module{
 		{
@@ -738,7 +740,9 @@ func TestInvalidFilesBeforeOverlayContains(t *testing.T) {
 	packagestest.TestAll(t, testInvalidFilesBeforeOverlayContains)
 }
 func testInvalidFilesBeforeOverlayContains(t *testing.T, exporter packagestest.Exporter) {
-	testenv.NeedsGo1Point(t, 15)
+	// Needs the go list handling of invalid package files from the Go 1.16
+	// development tree this snapshot was tested against; released go1.15 lacks it.
+	testenv.NeedsGo1Point(t, 16)
 
 	exported := packagestest.Export(t, exporter, []packagestest.Module{
 		{
